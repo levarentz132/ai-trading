@@ -85,10 +85,7 @@ Your goal is to assist the user in making a strategic trading decision based on 
 - USDT: ${usdt:.2f}
 - BTC: {btc:.6f} (≈ ${btc * price:.2f})
 
-📌 Constraints:
-- Only recommend BUY if USDT ≥ $5
-- Only recommend SELL if BTC value ≥ $10
-- If a trade is blocked due to low balance, return HOLD, even if signals support a trade.
+
 
 🧠 Instructions:
 1. Analyze the market indicators and wallet balance.
