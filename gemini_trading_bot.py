@@ -51,7 +51,7 @@ def add_indicators(df):
 
 
 # Ask Gemini for strategy
-def ask_gemini(price, rsi, ema9, ema21, macd, macd_signal, stochrsi, df):
+def ask_gemini(price, rsi, ema9, ema21, macd, macd_signal, stochrsi, df, question="What should I do?"):
     balance = binance.fetch_balance()
     usdt = balance['USDT']['free']
     btc = balance['BTC']['free']
@@ -64,10 +64,13 @@ def ask_gemini(price, rsi, ema9, ema21, macd, macd_signal, stochrsi, df):
     price_change_pct = ((price - price_past[-3]) / price_past[-3]) * 100
     macd_trend = "rising" if macd > macd_past[-1] > macd_past[-2] else "falling"
 
-    btc_value = btc * price  # Compute BTC value in USD
+    # btc_value = btc * price  # Compute BTC value in USD
 
     prompt = f"""
-You are an expert crypto trading assistant analyzing BTC/USDT on a 5-minute chart.
+You are an expert crypto trading assistant analyzing BTC/USDT on a 1-hour chart. 
+Your goal is to assist the user in making a strategic trading decision based on their wallet balance, technical indicators, and current market trend.
+
+🧾 User Question: {question}
 
 📈 Market Data:
 - Current Price: ${price:.2f}
@@ -80,24 +83,30 @@ You are an expert crypto trading assistant analyzing BTC/USDT on a 5-minute char
 
 💰 Wallet Balance:
 - USDT: ${usdt:.2f}
-- BTC: {btc:.6f} (≈ ${btc_value:.2f})
+- BTC: {btc:.6f} (≈ ${btc * price:.2f})
 
 📌 Constraints:
-- Do NOT recommend BUY if USDT < $5.
-- Do NOT recommend SELL if BTC value < $10.
-- If a trade is blocked by balance limits, HOLD must be returned even if indicators support action.
+- Only recommend BUY if USDT ≥ $5
+- Only recommend SELL if BTC value ≥ $10
+- If a trade is blocked due to low balance, return HOLD, even if signals support a trade.
 
 🧠 Instructions:
-1. Assess overall trend using EMA, RSI, MACD, StochRSI, and recent price change.
-2. Consider RSI < 30, price < EMAs, MACD falling as bearish.
-3. Consider RSI > 50, price > EMAs, MACD rising as bullish.
-4. If confidence < 60% or market is choppy, recommend HOLD.
-5. Explicitly say whether the HOLD is due to low balance, weak signal, or both.
+1. Analyze the market indicators and wallet balance.
+2. Recommend one action: BUY, SELL, or HOLD.
+3. If recommending BUY or SELL, suggest:
+   - TP (take-profit): a price above (for sell) or below (for buy) the current price.
+   - SL (stop-loss): a safety price to exit if the trend goes the wrong way.
+4. If recommending HOLD, specify whether it’s due to market indecision, low balance, or both.
+5. Only recommend BUY or SELL if you have at least 60% confidence based on the indicators.
 
 📌 Output Format (must appear at the bottom):
 action="[buy|sell|hold]"
-percent="[XX]%"
+percent="[NN]%"  # Allocation percentage (if buy/sell)
+tp="[TP price]"  # Target price to take profit
+sl="[SL price]"  # Stop loss price
 """
+
+
     response = model.generate_content(prompt)
     return response.text.strip()
 
@@ -237,6 +246,7 @@ def start_telegram_bot():
     dp.add_handler(CommandHandler("balance", telegram_balance))
     dp.add_handler(CommandHandler("buy", telegram_buy))
     dp.add_handler(CommandHandler("sell", telegram_sell))
+    dp.add_handler(CommandHandler("ask", telegram_ask))
 
     updater.start_polling()
 
@@ -278,6 +288,22 @@ def main():
 
     place_trade(action, percent=percent)
 
+def telegram_ask(update, context):
+    user_question = ' '.join(context.args) or "What should I do now?"
+    df = add_indicators(fetch_data())
+    last = df.iloc[-1]
+    response = ask_gemini(
+        price=last['close'],
+        rsi=last['rsi'],
+        ema9=last['ema9'],
+        ema21=last['ema21'],
+        macd=last['macd'],
+        macd_signal=last['macd_signal'],
+        stochrsi=last['stochrsi'],
+        df=df,
+        question=user_question
+    )
+    update.message.reply_text(f"🤖 Gemini Bot:\n{response}")
 
 
 def main_loop(interval_minutes=15):
@@ -293,5 +319,4 @@ def main_loop(interval_minutes=15):
             time.sleep(60)
 
 if __name__ == "__main__":
-    Thread(target=start_telegram_bot).start()     # 🔁 Start Telegram in a background thread
-    main_loop(interval_minutes=5)  # change to 5 for quicker scalping
+    start_telegram_bot()  # ✅ Only start Telegram bot without loop
