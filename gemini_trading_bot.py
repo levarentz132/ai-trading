@@ -80,54 +80,55 @@ def ask_gemini(price, rsi, ema9, ema21, macd, macd_signal, stochrsi, df, binance
     news = fetch_bitcoin_news()
 
     prompt = f"""
-You are a friendly and experienced crypto trading assistant helping a beginner analyze the BTC/USDT market on a 1-hour chart. Your role is to explain what's happening clearly, without using too much technical jargon, while still giving accurate insights.
+Anda adalah asisten trading kripto yang ramah dan berpengalaman, membantu seorang pemula untuk menganalisis pasar BTC/USDT pada grafik 1 jam. Peran Anda adalah menjelaskan apa yang terjadi dengan jelas, tanpa menggunakan terlalu banyak istilah teknis, sambil tetap memberikan wawasan yang akurat.
 
-🧾 User's Question:
+🧾 Pertanyaan Pengguna:
 "{question}"
 
-📊 Current Market Summary:
-- Price: ${price:.2f}
+📊 Ringkasan Pasar Saat Ini:
+- Harga: ${price:.2f}
 - RSI (Relative Strength Index): {rsi:.2f}
 - EMA(9): {ema9:.2f}, EMA(21): {ema21:.2f}
-- MACD: {macd:.4f}, Signal Line: {macd_signal:.4f}
+- MACD: {macd:.4f}, Garis Sinyal: {macd_signal:.4f}
 - StochRSI: {stochrsi:.4f}
 
-💰 Wallet Overview:
-- USDT (Cash): ${usdt:.2f}
+💰 Ringkasan Saldo:
+- USDT (Kas): ${usdt:.2f}
 - BTC: {btc:.6f} (≈ ${btc * price:.2f})
 
-🧠 Instructions for your response:
-- First, explain if the market is looking strong (bullish), weak (bearish), or mixed.
-- Break down the indicators simply: 
-  • RSI: Is it overbought or oversold? What does that mean?
-  • EMA: Is the price above or below these averages?
-  • MACD: Is momentum increasing or decreasing?
-  • StochRSI: Is the market showing signs of exhaustion or bounce?
+🧠 Petunjuk untuk respon Anda:
+- Pertama, jelaskan apakah pasar terlihat kuat (bullish), lemah (bearish), atau campuran.
+- Jelaskan indikator-indikator dengan sederhana:
+  • RSI: Apakah terlalu dibeli (overbought) atau terlalu dijual (oversold)? Apa artinya?
+  • EMA: Apakah harga berada di atas atau di bawah rata-rata ini?
+  • MACD: Apakah momentum meningkat atau menurun?
+  • StochRSI: Apakah pasar menunjukkan tanda kelelahan atau kemungkinan bounce (pantulan)?
 
-- Be realistic about what could happen, using phrases like “there’s a chance,” “this could mean,” or “it suggests.”
-- If the user has limited capital, explain how that impacts their ability to trade.
-- Avoid complicated terms like "convergence" or "crossovers" unless needed. Keep it simple and supportive.
+- Berikan prediksi realistis tentang apa yang bisa terjadi, menggunakan kalimat seperti “ini bisa berarti,” “ada kemungkinan,” atau “ini menunjukkan.”
+- Jika pengguna memiliki modal yang terbatas, jelaskan bagaimana itu memengaruhi kemampuan mereka untuk trading.
+- Hindari istilah teknis yang rumit seperti "konvergensi" atau "crossovers" kecuali diperlukan. Jaga agar tetap sederhana dan mendukung.
 
-📰 **Market Sentiment Based on Recent News:**
-{news}  # Insert the news fetched here
+📰 **Sentimen Pasar Berdasarkan Berita Terbaru:**
+{news}  # Masukkan berita yang diambil di sini
 
-💡 **Impact of the News on Market Trends:**
-Based on recent news, here’s what could happen:
-- **[Explain the news impact]:** Positive news like a major company adopting Bitcoin could cause the price to go up, while negative news like regulations could make the market go down.
-- **Impact Timeframe:** Consider if the news might affect the market in the short term (next few hours) or over a longer period.
+💡 **Dampak Berita Terhadap Tren Pasar:**
+Berdasarkan berita terbaru, berikut ini yang bisa terjadi:
+- **[Jelaskan dampak berita]:** Berita positif seperti adopsi Bitcoin oleh perusahaan besar bisa menyebabkan harga naik, sementara berita negatif seperti regulasi bisa membuat pasar turun.
+- **Waktu Dampak:** Pertimbangkan apakah berita tersebut akan memengaruhi pasar dalam jangka pendek (beberapa jam ke depan) atau jangka panjang.
 
-📌 **Conclusion:**
-Here’s what could happen in the next few hours:
-- **If the market is oversold:** The price might bounce back up, but the overall trend is still down unless positive changes happen.
-- **If the news influences the market:** Positive news could lead to a rise in price, but negative news could cause more drops.
-- **With your current capital:** Since your USDT is low, small price changes will have a big effect. Be careful with your trades and consider waiting for better opportunities.
+📌 **Kesimpulan:**
+Berikut ini yang bisa terjadi dalam beberapa jam ke depan:
+- **Jika pasar oversold:** Ada kemungkinan harga akan bounce (berbalik naik) dalam jangka pendek, tetapi tren keseluruhan masih turun kecuali ada perubahan positif.
+- **Jika berita mempengaruhi pasar:** Berita positif bisa menyebabkan kenaikan harga, sementara berita negatif bisa menyebabkan penurunan lebih lanjut.
+- **Dengan modal Anda yang terbatas:** Karena USDT Anda rendah, perubahan harga kecil bisa sangat mempengaruhi saldo Anda. Hati-hati dalam trading dan pertimbangkan untuk menunggu peluang yang lebih baik.
 
-📌 End your response with this format (no extra symbols or markdown):
+📌 Akhiri respons Anda dengan format ini (tanpa simbol atau markdown tambahan):
 action=[buy|sell|hold]
 percent=[XX]%
-tp=[take-profit price or leave blank]
-sl=[stop-loss price or leave blank]
+tp=[harga take-profit atau kosongkan]
+sl=[harga stop-loss atau kosongkan]
 """
+
 
     response = model.generate_content(prompt)
     return response.text.strip()
@@ -271,7 +272,7 @@ def start_telegram_bot():
     dp.add_handler(CommandHandler("sell", telegram_sell))
     dp.add_handler(CommandHandler("ask", telegram_ask))
     dp.add_handler(CommandHandler("register", telegram_register))
-
+    dp.add_handler(CommandHandler("askspec", telegram_askspec))
 
     updater.start_polling()
 
@@ -342,6 +343,75 @@ def telegram_register(update, context):
         print(f"❌ Supabase error: {e}")
         update.message.reply_text(f"❌ Failed to register: {e}")
 
+def ask_spec_gemini(price, rsi, ema9, ema21, macd, macd_signal, stochrsi, user_question):
+    # Create a prompt based on user question and market data
+    prompt = f"""
+    📊 **Analisis Pasar BTC/USDT:**
+    - Harga: ${price:.2f}
+    - RSI (9): {rsi:.2f}
+    - EMA(9): {ema9:.2f}, EMA(21): {ema21:.2f}
+    - MACD: {macd:.4f}, Garis Sinyal: {macd_signal:.4f}
+    - StochRSI: {stochrsi:.4f}
+    
+    💡 **Pertanyaan Pengguna:**
+    "{user_question}"
+
+    1. tolong berikan jawaban yang bisa di lakukan. 
+    2. tidak perlu takut untuk memberikan arahan.
+    3. jangan pernah jawab seperti " tidak dapat memprediksi pergerakan harga Bitcoin."
+    4. terus terang dengan jawaban anda jangan beralasan. bila ada rekomendasi langsung berikan rekomendasi.
+    """
+    
+    # Send the prompt to Gemini for analysis (this is where you'd forward the prompt to Gemini)
+    response = model.generate_content(prompt)  # Gemini call
+    return response.text.strip()
+
+
+def escape_markdown(text):
+    # Escape the Markdown special characters for Telegram
+    return re.sub(r'([*_`\[\]()~|])', r'\\\1', text)
+
+def telegram_askspec(update, context):
+    chat_id = str(update.effective_chat.id)
+    user_question = ' '.join(context.args) or "What should I do now?"
+
+    # 🔐 Load user's Binance API keys from Supabase
+    api_key, secret_key = get_user_binance_keys(chat_id)
+
+    if not api_key or not secret_key:
+        context.bot.send_message(chat_id=chat_id, text="❌ Binance API keys not found. Please register first.")
+        return
+
+    # ✅ Correct way:
+    binance = get_binance_client(api_key, secret_key)
+    binance.set_sandbox_mode(False)
+
+    try:
+        # Fetch market data and indicators
+        df = fetch_data(binance)
+        df = add_indicators(df)
+        last = df.iloc[-1]
+
+        # Call the ask_spec_gemini function to generate the response
+        response = ask_spec_gemini(
+            price=last['close'],
+            rsi=last['rsi'],
+            ema9=last['ema9'],
+            ema21=last['ema21'],
+            macd=last['macd'],
+            macd_signal=last['macd_signal'],
+            stochrsi=last['stochrsi'],
+            user_question=user_question
+        )
+
+        # Escape special characters in the response to ensure it's safe for Telegram
+        escaped_response = escape_markdown(response)
+
+        # Send the generated response from Gemini to the user
+        update.message.reply_text(escaped_response, parse_mode=ParseMode.MARKDOWN)
+
+    except Exception as e:
+        update.message.reply_text(f"⚠️ Error: {e}")
 
 def telegram_ask(update, context):
     chat_id = str(update.effective_chat.id)
