@@ -9,7 +9,8 @@ from datetime import datetime
 from telegram.ext import Updater, CommandHandler
 from telegram import ParseMode
 from threading import Thread
-
+from supabase import create_client
+from test import fetch_bitcoin_news  # or use the correct import path
 
 import google.generativeai as genai
 from dotenv import load_dotenv
@@ -21,24 +22,35 @@ load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
 BINANCE_SECRET_KEY = os.getenv("BINANCE_SECRET_KEY")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # Configure Gemini
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel("gemini-1.5-flash")
 
+# utils/supabase_client.py or somewhere near top
+def get_user_binance_keys(chat_id):
+    res = supabase.table("users").select("binance_key, binance_secret").eq("chat_id", chat_id).execute()
+    if res.data and res.data[0]['binance_key'] and res.data[0]['binance_secret']:
+        return res.data[0]['binance_key'], res.data[0]['binance_secret']
+    return None, None
+
 # Configure Binance (set sandbox mode to False to trade live)
-binance = ccxt.binance({
-    'apiKey': BINANCE_API_KEY,
-    'secret': BINANCE_SECRET_KEY,
-    'enableRateLimit': True
-})
-binance.set_sandbox_mode(False)  # ❗Set to False to trade live
+def get_binance_client(api_key, secret):
+    return ccxt.binance({
+        'apiKey': api_key,
+        'secret': secret,
+        'enableRateLimit': True
+    })
 
 # Fetch market data
-def fetch_data():
+def fetch_data(binance):
     bars = binance.fetch_ohlcv('BTC/USDT', timeframe='1h', limit=50)
     df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
     return df
+
 
 def add_indicators(df):
     df['rsi'] = ta.momentum.RSIIndicator(df['close'], window=9).rsi()
@@ -51,7 +63,7 @@ def add_indicators(df):
 
 
 # Ask Gemini for strategy
-def ask_gemini(price, rsi, ema9, ema21, macd, macd_signal, stochrsi, df, question="What should I do?"):
+def ask_gemini(price, rsi, ema9, ema21, macd, macd_signal, stochrsi, df, binance, question="What should I do?"):
     balance = binance.fetch_balance()
     usdt = balance['USDT']['free']
     btc = balance['BTC']['free']
@@ -65,44 +77,57 @@ def ask_gemini(price, rsi, ema9, ema21, macd, macd_signal, stochrsi, df, questio
     macd_trend = "rising" if macd > macd_past[-1] > macd_past[-2] else "falling"
 
     # btc_value = btc * price  # Compute BTC value in USD
+    news = fetch_bitcoin_news()
 
     prompt = f"""
-You are an expert crypto trading assistant analyzing BTC/USDT on a 1-hour chart. 
-Your goal is to assist the user in making a strategic trading decision based on their wallet balance, technical indicators, and current market trend.
+You are a friendly and experienced crypto trading assistant helping a beginner analyze the BTC/USDT market on a 1-hour chart. Your role is to explain what's happening clearly, without using too much technical jargon, while still giving accurate insights.
 
-🧾 User Question: {question}
+🧾 User's Question:
+"{question}"
 
-📈 Market Data:
-- Current Price: ${price:.2f}
-- RSI(9): {rsi:.2f} ({rsi_trend})
+📊 Current Market Summary:
+- Price: ${price:.2f}
+- RSI (Relative Strength Index): {rsi:.2f}
 - EMA(9): {ema9:.2f}, EMA(21): {ema21:.2f}
-- Price Change (last 3 candles): {price_change_pct:.2f}%
-- MACD: {macd:.4f} ({macd_trend})
-- MACD Signal: {macd_signal:.4f}
+- MACD: {macd:.4f}, Signal Line: {macd_signal:.4f}
 - StochRSI: {stochrsi:.4f}
 
-💰 Wallet Balance:
-- USDT: ${usdt:.2f}
+💰 Wallet Overview:
+- USDT (Cash): ${usdt:.2f}
 - BTC: {btc:.6f} (≈ ${btc * price:.2f})
 
+🧠 Instructions for your response:
+- First, explain if the market is looking strong (bullish), weak (bearish), or mixed.
+- Break down the indicators simply: 
+  • RSI: Is it overbought or oversold? What does that mean?
+  • EMA: Is the price above or below these averages?
+  • MACD: Is momentum increasing or decreasing?
+  • StochRSI: Is the market showing signs of exhaustion or bounce?
 
+- Be realistic about what could happen, using phrases like “there’s a chance,” “this could mean,” or “it suggests.”
+- If the user has limited capital, explain how that impacts their ability to trade.
+- Avoid complicated terms like "convergence" or "crossovers" unless needed. Keep it simple and supportive.
 
-🧠 Instructions:
-1. Analyze the market indicators and wallet balance.
-2. Recommend one action: BUY, SELL, or HOLD.
-3. If recommending BUY or SELL, suggest:
-   - TP (take-profit): a price above (for sell) or below (for buy) the current price.
-   - SL (stop-loss): a safety price to exit if the trend goes the wrong way.
-4. If recommending HOLD, specify whether it’s due to market indecision, low balance, or both.
-5. Only recommend BUY or SELL if you have at least 60% confidence based on the indicators.
+📰 **Market Sentiment Based on Recent News:**
+{news}  # Insert the news fetched here
 
-📌 Output Format (must appear at the bottom):
-action="[buy|sell|hold]"
-percent="[NN]%"  # Allocation percentage (if buy/sell)
-tp="[TP price]"  # Target price to take profit
-sl="[SL price]"  # Stop loss price
+💡 **Impact of the News on Market Trends:**
+Based on recent news, here’s what could happen:
+- **[Explain the news impact]:** Positive news like a major company adopting Bitcoin could cause the price to go up, while negative news like regulations could make the market go down.
+- **Impact Timeframe:** Consider if the news might affect the market in the short term (next few hours) or over a longer period.
+
+📌 **Conclusion:**
+Here’s what could happen in the next few hours:
+- **If the market is oversold:** The price might bounce back up, but the overall trend is still down unless positive changes happen.
+- **If the news influences the market:** Positive news could lead to a rise in price, but negative news could cause more drops.
+- **With your current capital:** Since your USDT is low, small price changes will have a big effect. Be careful with your trades and consider waiting for better opportunities.
+
+📌 End your response with this format (no extra symbols or markdown):
+action=[buy|sell|hold]
+percent=[XX]%
+tp=[take-profit price or leave blank]
+sl=[stop-loss price or leave blank]
 """
-
 
     response = model.generate_content(prompt)
     return response.text.strip()
@@ -118,54 +143,18 @@ def extract_trade_details(response):
 
     return "hold", 0.0
 
-def log_wallet(symbol="BTC/USDT"):
+def log_wallet(binance, symbol="BTC/USDT"):
     market = binance.market(symbol)
     base_currency = market['base']   # BTC
     quote_currency = market['quote'] # USDT
 
     balance = binance.fetch_balance()
-
     usdt_free = balance[quote_currency]['free']
     btc_free = balance[base_currency]['free']
 
     print(f"💰 Wallet Balance:")
     print(f"   {quote_currency}: {usdt_free:.2f} USDT available")
     print(f"   {base_currency}: {btc_free:.6f} BTC available")
-
-
-def place_trade(signal, symbol="BTC/USDT", percent=0.1):
-    market = binance.market(symbol)
-    base_currency = market['base']   # BTC
-    quote_currency = market['quote'] # USDT
-    price = binance.fetch_ticker(symbol)['last']
-
-    try:
-        if signal.lower().startswith("buy"):
-            usdt_available = binance.fetch_balance()[quote_currency]['free']
-            trade_amount_usdt = usdt_available * percent
-            btc_amount = trade_amount_usdt / price
-            print(f"🟢 Executing BUY: ~{btc_amount:.6f} BTC (~{trade_amount_usdt:.2f} USDT)")
-            order = binance.create_market_buy_order(symbol, round(btc_amount, 6))
-
-        elif signal.lower().startswith("sell"):
-            btc_available = binance.fetch_balance()[base_currency]['free']
-            trade_amount_btc = btc_available * percent
-            print(f"🔴 Executing SELL: ~{trade_amount_btc:.6f} BTC")
-            order = binance.create_market_sell_order(symbol, round(trade_amount_btc, 6))
-
-        else:
-            print("⏸ No trade executed.")
-            return
-
-        success_msg = f"✅ Trade executed: {signal.upper()} {percent * 100:.0f}% | Order ID: {order['id']}"
-        print(success_msg)
-        send_telegram(success_msg)
-
-    except Exception as e:
-        error_msg = f"❌ Trade failed: {e}"
-        print(error_msg)
-        send_telegram(error_msg)
-
 
 def send_telegram(message):
     token = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -178,39 +167,76 @@ def send_telegram(message):
         print(f"⚠️ Telegram error: {e}")
 
 def telegram_price(update, context):
-    df = fetch_data()
-    df = add_indicators(df)  # ✅ Add this line
+    chat_id = str(update.effective_chat.id)
+    api_key, secret_key = get_user_binance_keys(chat_id)
+    if not api_key:
+        context.bot.send_message(chat_id=chat_id, text="❌ Binance API keys not found.")
+        return
+
+    binance = get_binance_client(api_key, secret_key)
+    binance.set_sandbox_mode(False)
+
+    df = fetch_data(binance)
+    df = add_indicators(df)
     last = df.iloc[-1]
     price = last['close']
     rsi = last['rsi']
-    ema = last['ema']
-    msg = f"📊 *BTC/USDT*\nPrice: ${price:.2f}\nRSI: {rsi:.2f}\nEMA(14): {ema:.2f}"
-    context.bot.send_message(chat_id=update.effective_chat.id, text=msg, parse_mode=ParseMode.MARKDOWN)
+    ema = last['ema9']
+    msg = f"📊 *BTC/USDT*\nPrice: ${price:.2f}\nRSI: {rsi:.2f}\nEMA(9): {ema:.2f}"
+    context.bot.send_message(chat_id=chat_id, text=msg, parse_mode=ParseMode.MARKDOWN)
 
 
 def telegram_balance(update, context):
+    chat_id = str(update.effective_chat.id)
+    api_key, secret_key = get_user_binance_keys(chat_id)
+    if not api_key:
+        context.bot.send_message(chat_id=chat_id, text="❌ Binance API keys not found.")
+        return
+
+    binance = get_binance_client(api_key, secret_key)
+    binance.set_sandbox_mode(False)
+
     balance = binance.fetch_balance()
     usdt = balance['USDT']['free']
     btc = balance['BTC']['free']
     msg = f"💰 *Your Balance:*\nUSDT: {usdt:.2f}\nBTC: {btc:.6f}"
-    context.bot.send_message(chat_id=update.effective_chat.id, text=msg, parse_mode=ParseMode.MARKDOWN)
+    context.bot.send_message(chat_id=chat_id, text=msg, parse_mode=ParseMode.MARKDOWN)
 
-def fetch_price(symbol="BTC/USDT"):
+def fetch_price(binance, symbol="BTC/USDT"):
     return binance.fetch_ticker(symbol)['last']
 
 def telegram_buy(update, context):
+    chat_id = str(update.effective_chat.id)
+    api_key, secret_key = get_user_binance_keys(chat_id)
+    if not api_key:
+        context.bot.send_message(chat_id=chat_id, text="❌ Binance API keys not found.")
+        return
+
+    binance = get_binance_client(api_key, secret_key)
+    binance.set_sandbox_mode(False)
+
     try:
         percent = float(context.args[0]) / 100
         balance = binance.fetch_balance()['USDT']['free']
-        price = fetch_price()
+        price = fetch_price(binance)
         amount = (balance * percent) / price
         binance.create_market_buy_order('BTC/USDT', round(amount, 6))
         msg = f"🟢 Bought {amount:.6f} BTC (~{balance * percent:.2f} USDT)"
     except Exception as e:
         msg = f"❌ Buy failed: {e}"
-    context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
+
+    context.bot.send_message(chat_id=chat_id, text=msg)
 
 def telegram_sell(update, context):
+    chat_id = str(update.effective_chat.id)
+    api_key, secret_key = get_user_binance_keys(chat_id)
+    if not api_key:
+        context.bot.send_message(chat_id=chat_id, text="❌ Binance API keys not found.")
+        return
+
+    binance = get_binance_client(api_key, secret_key)
+    binance.set_sandbox_mode(False)
+
     try:
         if not context.args:
             raise ValueError("Missing percentage argument. Usage: /sell 10")
@@ -220,19 +246,19 @@ def telegram_sell(update, context):
             raise ValueError("Invalid percentage. Use 1–100.")
 
         balance = binance.fetch_balance()['BTC']['free']
-        price = binance.fetch_ticker('BTC/USDT')['last']
+        price = fetch_price(binance)
         amount = balance * percent
 
         binance.create_market_sell_order('BTC/USDT', round(amount, 6))
         msg = f"🔴 Sold {amount:.6f} BTC (~${amount * price:.2f})"
-
 
     except ValueError as ve:
         msg = f"⚠️ Error: {ve}"
     except Exception as e:
         msg = f"❌ Sell failed: {e}"
 
-    context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
+    context.bot.send_message(chat_id=chat_id, text=msg)
+
 
 
 def start_telegram_bot():
@@ -244,76 +270,129 @@ def start_telegram_bot():
     dp.add_handler(CommandHandler("buy", telegram_buy))
     dp.add_handler(CommandHandler("sell", telegram_sell))
     dp.add_handler(CommandHandler("ask", telegram_ask))
+    dp.add_handler(CommandHandler("register", telegram_register))
+
 
     updater.start_polling()
 
 # Main bot loop
 def main():
-    df = fetch_data()
+    # 🧪 Example: testing with your own Telegram chat_id
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    api_key, secret_key = get_user_binance_keys(chat_id)
+    if not api_key:
+        print("❌ Binance API keys not found.")
+        return
+
+    binance = get_binance_client(api_key, secret_key)
+    binance.set_sandbox_mode(False)
+
+    df = fetch_data(binance)
     df = add_indicators(df)
     last = df.iloc[-1]
     price = last['close']
     rsi = last['rsi']
     ema9 = last['ema9']
     ema21 = last['ema21']
-
-    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    log_wallet()
-
     macd = last['macd']
     macd_signal = last['macd_signal']
     stochrsi = last['stochrsi']
 
-    decision_text = ask_gemini(price, rsi, ema9, ema21, macd, macd_signal, stochrsi, df)
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    log_wallet(binance)
+
+    decision_text = ask_gemini(price, rsi, ema9, ema21, macd, macd_signal, stochrsi, df, binance)
     action, percent = extract_trade_details(decision_text)
 
     if action in ["buy", "sell"] and percent == 0:
         percent = 0.1
 
-    # Log text for Telegram
     message = (
-    f"📊 [{timestamp}]\n"
-    f"Price: ${price:.2f} | RSI: {rsi:.2f} | EMA(9): {ema9:.2f} | EMA(21): {ema21:.2f}\n"
-    f"MACD: {macd:.4f} | Signal: {macd_signal:.4f} | StochRSI: {stochrsi:.4f}\n\n"
-    f"🤖 Gemini Response:\n{decision_text}\n"
-    f"Action Extracted: {action.upper()} {int(percent * 100)}%\n"
-)
-
+        f"📊 [{timestamp}]\n"
+        f"Price: ${price:.2f} | RSI: {rsi:.2f} | EMA(9): {ema9:.2f} | EMA(21): {ema21:.2f}\n"
+        f"MACD: {macd:.4f} | Signal: {macd_signal:.4f} | StochRSI: {stochrsi:.4f}\n\n"
+        f"🤖 Gemini Response:\n{decision_text}\n"
+        f"Action Extracted: {action.upper()} {int(percent * 100)}%\n"
+    )
 
     send_telegram(message)
     print(message)
 
-    place_trade(action, percent=percent)
+def telegram_register(update, context):
+    chat_id = str(update.effective_chat.id)
+    args = context.args
+
+    if len(args) != 2:
+        update.message.reply_text("❌ Usage: /register <api_key> <secret_key>")
+        return
+
+    api_key, secret_key = args
+
+    try:
+        # Upsert to users table
+        supabase.table("users").upsert({
+            "chat_id": chat_id,
+            "binance_key": api_key,
+            "binance_secret": secret_key
+        }).execute()
+
+        update.message.reply_text("✅ Binance API keys registered successfully.")
+        print(f"✅ Registered keys for chat_id: {chat_id}")
+    except Exception as e:
+        print(f"❌ Supabase error: {e}")
+        update.message.reply_text(f"❌ Failed to register: {e}")
+
 
 def telegram_ask(update, context):
+    chat_id = str(update.effective_chat.id)
     user_question = ' '.join(context.args) or "What should I do now?"
-    df = add_indicators(fetch_data())
-    last = df.iloc[-1]
-    response = ask_gemini(
-        price=last['close'],
-        rsi=last['rsi'],
-        ema9=last['ema9'],
-        ema21=last['ema21'],
-        macd=last['macd'],
-        macd_signal=last['macd_signal'],
-        stochrsi=last['stochrsi'],
-        df=df,
-        question=user_question
-    )
-    update.message.reply_text(f"🤖 Gemini Bot:\n{response}")
+
+    # 🔐 Load user's Binance API keys from Supabase
+    api_key, secret_key = get_user_binance_keys(chat_id)
+
+    if not api_key or not secret_key:
+        context.bot.send_message(chat_id=chat_id, text="❌ Binance API keys not found. Please register first.")
+        return
+
+   # ✅ Correct way:
+    binance = get_binance_client(api_key, secret_key)
+    binance.set_sandbox_mode(False)
+
+    try:
+        df = fetch_data(binance)
+        df = add_indicators(df)
+        last = df.iloc[-1]
+
+        response = ask_gemini(
+            price=last['close'],
+            rsi=last['rsi'],
+            ema9=last['ema9'],
+            ema21=last['ema21'],
+            macd=last['macd'],
+            macd_signal=last['macd_signal'],
+            stochrsi=last['stochrsi'],
+            df=df,
+            question=user_question,
+            binance=binance  # pass client here
+        )
+
+        msg = (
+            f"📊 *BTC/USDT Analysis*\n"
+            f"Price: ${last['close']:.2f}\n"
+            f"RSI(9): {last['rsi']:.2f}\n"
+            f"EMA(9): {last['ema9']:.2f}, EMA(21): {last['ema21']:.2f}\n"
+            f"MACD: {last['macd']:.4f}, Signal: {last['macd_signal']:.4f}\n"
+            f"StochRSI: {last['stochrsi']:.4f}\n\n"
+            f"💰 *Wallet:*\n"
+            f"USDT: {binance.fetch_balance()['USDT']['free']:.2f}\n"
+            f"BTC: {binance.fetch_balance()['BTC']['free']:.6f}\n\n"
+            f"🤖 *Gemini Bot Suggestion:*\n{response}"
+        )
+        update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
 
 
-def main_loop(interval_minutes=15):
-    print("🚀 AI Trading Bot Started. Press Ctrl+C to stop.\n")
-    while True:
-        try:
-            main()
-            print(f"⏳ Waiting {interval_minutes} minutes before next run...\n")
-            time.sleep(interval_minutes * 60)
-        except Exception as e:
-            print(f"⚠️ Error: {e}")
-            print("Retrying in 1 minute...")
-            time.sleep(60)
+    except Exception as e:
+        update.message.reply_text(f"⚠️ Error: {e}")
 
 if __name__ == "__main__":
     start_telegram_bot()  # ✅ Only start Telegram bot without loop
