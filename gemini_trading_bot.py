@@ -11,6 +11,8 @@ from telegram import ParseMode
 from threading import Thread
 from supabase import create_client
 from test import fetch_bitcoin_news  # or use the correct import path
+import json
+from pathlib import Path
 
 import google.generativeai as genai
 from dotenv import load_dotenv
@@ -260,6 +262,28 @@ def telegram_sell(update, context):
 
     context.bot.send_message(chat_id=chat_id, text=msg)
 
+def telegram_seema(update, context):
+    try:
+        log_path = Path("ema_log.csv")
+        if not log_path.exists():
+            update.message.reply_text("❌ No EMA log file found.")
+            return
+
+        with log_path.open("r") as f:
+            lines = f.readlines()
+            if len(lines) <= 1:
+                update.message.reply_text("📄 EMA log is empty.")
+                return
+
+            last_lines = lines[-6:]  # last 5 entries + header
+            header = last_lines[0].strip()
+            entries = [line.strip() for line in last_lines[1:]]
+
+            message = f"📈 *Last EMA Trades:*\n\n*{header}*\n" + "\n".join(entries)
+            update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
+    except Exception as e:
+        update.message.reply_text(f"⚠️ Error reading EMA log: {e}")
+
 
 
 def start_telegram_bot():
@@ -273,6 +297,8 @@ def start_telegram_bot():
     dp.add_handler(CommandHandler("ask", telegram_ask))
     dp.add_handler(CommandHandler("register", telegram_register))
     dp.add_handler(CommandHandler("askspec", telegram_askspec))
+    dp.add_handler(CommandHandler("seema", telegram_seema))
+
 
     updater.start_polling()
 
