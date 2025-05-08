@@ -2,11 +2,11 @@
 """
 Trend-filtered ATR breakout scalper – Binance Spot TESTNET
 ----------------------------------------------------------
-• Longs only when 4-h close > EMA-200
-• Entry: 1-m close > recent high + 0.25×ATR THEN pullback to EMA-8 (LIMIT_MAKER)
-• Risk: 0.5 % of *allocated* USDT, stop = 1.25×ATR
-• TP-1 at 2 R (half), TP-2 at 4 R, else stop at −1 R
-• Daily circuit breaker: –3 % realised PnL
+• Long only when 4-h close > EMA-200
+• Entry: 1-m close > recent high + 0.25 ATR  THEN pullback to EMA-8 (LIMIT_MAKER)
+• Risk: 0.5 % of USDT_ALLOC, stop = 1.25 ATR
+• TP-1 at 2 R, TP-2 at 4 R
+• Day circuit breaker = –3 % realised PnL
 • State  → state_brk.json   • Log → brk_log.csv
 """
 
@@ -29,11 +29,11 @@ HTF_INT    = "4h"
 EMA_HTF    = 200
 ATR_P      = 14
 BREAK_K    = 0.25
-RISK_PCT   = 0.005          # of USDT_ALLOC
+RISK_PCT   = 0.005
 STOP_MULT  = 1.25
 TP1_R, TP2_R = 2, 4
 DAILY_DD   = 0.03
-USDT_ALLOC = 30_000         # bankroll for THIS bot
+USDT_ALLOC = 30_000   # bot bankroll
 
 STATE_F = Path("state_brk.json")
 LOG_F   = Path("brk_log.csv")
@@ -41,9 +41,9 @@ BOT_TAG = "BRK"
 HEADERS = {"X-MBX-APIKEY": API_KEY}
 # ──────────────────────────
 
-# ─── request helpers ───
+# ─── low-level requests ───
 def _ts(): return int(time.time()*1000)
-def _sign(p): q=urlencode(p,doseq=True); s=hmac.new(SECRET_KEY.encode(),q.encode(),hashlib.sha256).hexdigest(); return f"{q}&signature={s}"
+def _sign(p): q=urlencode(p,doseq=True); sig=hmac.new(SECRET_KEY.encode(),q.encode(),hashlib.sha256).hexdigest(); return f"{q}&signature={sig}"
 def _get(path,params=None,signed=False):
     url=f"{BASE_URL}{path}"
     if signed: params=params or {}; params["timestamp"]=_ts(); url=f"{url}?{_sign(params)}"; params=None
@@ -53,29 +53,30 @@ def _post(path,params,signed=True):
     if signed: params["timestamp"]=_ts(); url=f"{url}?{_sign(params)}"; params=None
     r=requests.post(url,headers=HEADERS,data=params,timeout=10); r.raise_for_status(); return r.json()
 def tag(side): return f"{BOT_TAG}-{side}-{uuid.uuid4().hex[:6]}"
-# ───────────────────────
+# ──────────────────────────
 
-# ─── filters & quantisers ───
+# ─── filters / rounding ───
 flt=_get("/api/v3/exchangeInfo",{"symbol":SYMBOL})["symbols"][0]["filters"]
 STEP=float(next(f for f in flt if f["filterType"]=="LOT_SIZE")["stepSize"])
 TICK=float(next(f for f in flt if f["filterType"]=="PRICE_FILTER")["tickSize"])
 MIN_NOT=float(next(f for f in flt if f["filterType"] in ("NOTIONAL","MIN_NOTIONAL"))["minNotional"])
-q_qty=lambda q: round(q//STEP*STEP,6); q_price=lambda p: round(p//TICK*TICK,2)
+q_qty=lambda q: round(q//STEP*STEP,6)
+q_price=lambda p: round(p//TICK*TICK,2)
 # ──────────────────────────
 
-# ─── data helpers ───
+# ─── helpers ───
 def klines(interval,limit=500):
     k=_get("/api/v3/klines",{"symbol":SYMBOL,"interval":interval,"limit":limit})
     return [float(c[4]) for c in k]
-def balances()->Tuple[float,float]:
+def balances() -> Tuple[float,float]:
     bal=_get("/api/v3/account",signed=True)["balances"]
-    d={b["asset"]:float(b["free"]) for b in bal}; return d.get("USDT",0),d.get("BTC",0)
-atr = lambda p,per: pd.Series(p).diff().abs().rolling(per).mean().iloc[-1]
-# ───────────────────────
+    d={b["asset"]:float(b["free"]) for b in bal}; return d.get("USDT",0), d.get("BTC",0)
+atr = lambda s,p: pd.Series(s).diff().abs().rolling(p).mean().iloc[-1]
+# ──────────────────────────
 
-# ─── state & log ───
-def load():  return json.loads(STATE_F.read_text()) if STATE_F.exists() else {"qty":0}
-def save(s): STATE_F.write_text(json.dumps(s))
+# ─── state / log ───
+load=lambda: json.loads(STATE_F.read_text()) if STATE_F.exists() else {"qty":0}
+save=lambda s: STATE_F.write_text(json.dumps(s))
 def log(act,price,qty,pnl,usdt,btc):
     fresh=not LOG_F.exists()
     with LOG_F.open("a",newline="") as f:
@@ -84,46 +85,45 @@ def log(act,price,qty,pnl,usdt,btc):
         w.writerow([datetime.utcnow().isoformat(timespec="seconds"),
                     act,f"{price:.2f}",f"{qty:.6f}",f"{pnl:.2f}",
                     f"{usdt:.2f}",f"{btc:.6f}"])
-# ─────────────────────
+# ──────────────────────────
 
 def today_pnl():
     if not LOG_F.exists(): return 0
-    df=pd.read_csv(LOG_F); 
+    df=pd.read_csv(LOG_F)
     if "pnl" not in df.columns: return 0
     col="ts" if "ts" in df.columns else "Timestamp"
     df[col]=pd.to_datetime(df[col])
     return df[df[col].dt.date==date.today()]["pnl"].sum()
+# ──────────────────────────
 
-# ─── main loop ───
 def main():
     st=load()
     print("Breakout bot live –", datetime.utcnow().isoformat(timespec="seconds"))
 
     while True:
         try:
-            usdt, btc_wallet = balances()
+            usdt,_ = balances()
             if today_pnl() <= -DAILY_DD*usdt:
                 print("🟥 day DD hit; sleeping 60 s"); time.sleep(60); continue
 
-            ltf     = klines(LTF_INT, max(ATR_P,50))
-            price   = ltf[-1]
-            atr_now = atr(ltf,ATR_P)
+            ltf   = klines(LTF_INT, max(ATR_P,50))
+            price = ltf[-1]
+            atr_now = atr(ltf, ATR_P)
 
-            htf  = klines(HTF_INT, EMA_HTF)
+            htf   = klines(HTF_INT, EMA_HTF)
             ema200 = pd.Series(htf).ewm(span=EMA_HTF,adjust=False).mean().iloc[-1]
-            regime_long = htf[-1] > ema200
+            regime_ok = htf[-1] > ema200
+            in_pos    = st["qty"]>0
 
-            in_pos = st["qty"]>0
-
-            # ENTRY  ─────────────────────
-            if not in_pos and regime_long:
-                recent_high=max(ltf[-4:-1])
-                if price > recent_high + BREAK_K*atr_now and \
-                   price <= pd.Series(ltf).ewm(span=8,adjust=False).mean().iloc[-1]:
-
-                    risk   = min(usdt,USDT_ALLOC)*RISK_PCT
+            # ── ENTRY ────────────────────────────────────────────────
+            if not in_pos and regime_ok:
+                recent_high = max(ltf[-4:-1])
+                pullback_ok = price <= pd.Series(ltf).ewm(span=8,adjust=False).mean().iloc[-1]
+                breakout_ok = price > recent_high + BREAK_K*atr_now
+                if breakout_ok and pullback_ok:
+                    risk   = min(usdt, USDT_ALLOC)*RISK_PCT
                     stop_d = STOP_MULT*atr_now
-                    qty    = max(q_qty(risk/stop_d), q_qty(MIN_NOTIONAL/price))
+                    qty    = max(q_qty(risk/stop_d), q_qty(MIN_NOT/price))
                     limit  = q_price(price)
 
                     _post("/api/v3/order",{
@@ -140,13 +140,13 @@ def main():
                     print(f"✅ BUY {qty:.6f}@{limit}")
                     continue
 
-            # MANAGEMENT / EXIT ──────────
+            # ── MANAGEMENT ───────────────────────────────────────────
             if in_pos:
                 q,entry = st["qty"], st["entry"]
                 stop,tp1,tp2,half = st["stop"], st["tp1"], st["tp2"], st["half"]
 
-                # TP-1
-                if not half and price>=tp1:
+                # TP-1 (scale out half)
+                if not half and price >= tp1:
                     sell=q_qty(q*0.5)
                     _post("/api/v3/order",{
                         "symbol":SYMBOL,"side":"SELL","type":"MARKET",
@@ -170,13 +170,13 @@ def main():
                     print(f"✅ EXIT {sell:.6f}@{price} | PnL {pnl:.2f}")
                     st={"qty":0}; save(st)
 
-            # heartbeat
+            # ── heartbeat ────────────────────────────────────────────
             print(f"{datetime.utcnow():%H:%M:%S} | {price:,.2f} | "
-                  f"{'LONG' if regime_long else 'FLAT'} | ATR {atr_now:.2f} | "
-                  f"USDT {usdt:,.0f} | BTC {btc_wallet:.6f}", end="\r")
+                  f"{'LONG' if regime_ok else 'FLAT'} | ATR {atr_now:.2f} | "
+                  f"USDT {usdt:,.0f} | BTC {balances()[1]:.6f}", end="\r")
 
         except Exception as e:
-            print("\n❌",e)
+            print("\n❌", e)
 
         time.sleep(5)
 
