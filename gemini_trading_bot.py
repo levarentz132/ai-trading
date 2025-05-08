@@ -275,7 +275,7 @@ def telegram_seema(update, context):
                 update.message.reply_text("📄 EMA log is empty.")
                 return
 
-            last_lines = lines[-6:]  # last 5 entries + header
+            last_lines = lines[-16:]  # last 5 entries + header
             header = last_lines[0].strip()
             entries = [line.strip() for line in last_lines[1:]]
 
